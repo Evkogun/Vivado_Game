@@ -1,146 +1,195 @@
 # Project Deathless Dusk
 
-I built this as a Verilog FPGA game for the ES2E3 Digital Systems Design assignment at Warwick.
+I built this as a Verilog FPGA zombie survival game for the ES2E3 Digital Systems Design assignment at Warwick.
 
-The aim was to make a small hardware-based zombie survival game rather than a simple VGA demo. The design uses VGA output, sprite ROMs, game-state logic, collision checks, weapon logic, zombie movement and microphone input.
+The project runs on a Nexys A7-style FPGA board and outputs the game through VGA. I wanted it to be more than a basic sprite demo, so I added enemies, weapons, waves, collision, UI, health, sound/noise logic and animated sprites.
 
-The GitHub version currently contains the VGA/player-rendering part of the project:
+## Features
 
-```text
-drawcon.v
-game_top.v
-vga.v
-Correct_Sprite_Frames/
-```
-
-## What I built
-
-- VGA display output at 1440 x 900
-- COE-based sprite storage using Vivado block memory
-- animated player sprites
-- button-based player movement
-- background and UI rendering logic
-- zombie detection and movement logic
-- bullet and weapon behaviour
-- wave progression and scoring
-- microphone-based noise detection
+- 1440 x 900 VGA output
+- player movement using board buttons
+- animated player and zombie sprites
+- COE-based sprite and background ROMs
+- map collision using a ROM-backed collision grid
+- multiple weapons selected with switches
+- bullet movement, spread, range and hit detection
+- zombie detection based on player noise
+- wave progression with increasing zombie count
+- health, weapon, sound, wave and end-screen UI
+- game win/game over states
 - waveform and gameplay testing
 
-## Game idea
+## Gameplay
 
 The game is a top-down zombie survival game.
 
-The player progresses through five waves. Each wave increases the difficulty by adding zombies or increasing zombie health. The player can choose between four weapons:
+The player has to survive waves of zombies. Each wave increases the number of active zombies. Zombies detect the player based on a noise value, so sprinting and using louder weapons makes the player easier to find.
 
-- assault rifle - balanced range, spread, sound and fire rate
-- pistol - longer range, lower sound and lower spread
-- shotgun - high spread, high sound and short range
-- knife - no sound and no spread
+The weapons have different trade-offs:
 
-Noise is part of the game logic. Sprinting or using louder weapons increases the zombie detection radius. This made the game less about only shooting and more about balancing movement, weapon choice and positioning.
+| Weapon | Idea |
+|---|---|
+| Assault rifle | balanced range, spread, sound and fire rate |
+| Pistol | lower sound and better control |
+| Shotgun | high spread, high sound and short range |
+| Knife | silent option |
 
-## Main modules
+## Main files
 
-### `vga.v`
+```text
+game_top.v
+drawcon.v
+vga.v
+zombie.v
+clk_conv.v
+random_number.v
+bullet_logic.v
+*.coe sprite/background/UI memory files
+```
 
-Generates the VGA timing signals and current pixel coordinates.
+Some Vivado IP blocks are also needed, especially the clock wizard and block memory ROMs.
 
-It handles:
-
-- horizontal and vertical counters
-- active display region
-- `hsync` and `vsync`
-- RGB output during visible pixels
-
-### `drawcon.v`
-
-Handles sprite and background drawing.
-
-It checks the current VGA pixel position, calculates the sprite ROM address and outputs the correct 12-bit RGB value. Sprite frames are stored in block memory using `.coe` files.
+## Module overview
 
 ### `game_top.v`
 
-Connects the main modules together.
+This is the top-level module. It connects the VGA controller, drawing logic, player movement, collision memory and pixel clock together.
+
+It also handles the player's position, direction, button input and the pipelined collision check. I used a small state machine so the collision address could be calculated, waited on, then read before movement was applied.
+
+### `vga.v`
+
+This generates the VGA timing.
+
+It creates:
+
+- horizontal and vertical counters
+- `hsync`
+- `vsync`
+- current pixel coordinates
+- RGB output during the active display area
+
+### `drawcon.v`
+
+This is the main rendering and game-state module.
 
 It handles:
 
-- clock generation
-- player position
-- button input
-- linking the VGA controller to the drawing logic
+- player sprite drawing
+- background drawing
+- zombie rendering
+- bullet rendering
+- weapon UI
+- health UI
+- sound UI
+- wave UI
+- title and end screens
+- score/wave progression
+- game over and win states
 
-## Sprite and memory work
+The module uses block memory outputs for the background, sprites and UI, then decides which pixel should be shown at the current VGA coordinate.
 
-I made the sprites and maps in Piskel, then converted exported C-style pixel data into Vivado `.coe` files using MATLAB.
+### `zombie.v`
 
-The design uses block memory ROMs for sprite frames. Different sprites are selected through address calculation and animation counters. Some sprites are scaled or flipped depending on direction.
+This handles zombie behaviour.
 
-## Zombie logic
+Each zombie tracks its own position, direction, animation state, hit count and attack state. The zombie compares its simplified position against the player's simplified position. If the squared distance is inside the current sound radius, it detects the player and moves towards them.
 
-The zombie logic compares simplified player and zombie coordinates. A sound level is converted into a detection radius, then compared against the squared distance between the zombie and player.
+Zombie bullet collision is also checked here. When a zombie is hit enough times, it resets and increments the score count.
 
-The zombies do not instantly turn towards the player. Their detection logic runs on a slower clock, which makes them overshoot slightly and makes the movement feel less robotic.
+### `clk_conv.v`
 
-## Bullet and weapon logic
+This creates slower clocks for animation/game timing.
 
-Bullet behaviour depends on the selected weapon.
+### `random_number.v`
 
-The system calculates:
+This is an LFSR-based pseudo-random number generator. It was intended for randomised zombie behaviour or spawn variation.
 
-- starting position from the player sprite and facing direction
-- bullet velocity
-- spread
-- range
-- sound output
-- active bullets on screen
+## Sprite and memory workflow
 
-Up to 10 bullets can be active at once. Their coordinates are passed into the drawing and collision logic.
+I made the sprites and maps in Piskel, exported the pixel data, then converted it into Vivado `.coe` files using MATLAB.
 
-## Microphone input
+The design uses ROMs for:
 
-I used the Nexys A7 microphone to add sound-based interaction.
+- player sprites
+- zombie sprites
+- background
+- weapon UI
+- health UI
+- sound UI
+- wave UI
+- title/end screens
 
-The microphone logic samples the PDM signal and stores the highest value over a short time window. This value is used as a rough noise level for gameplay.
+The player and zombie sprites use calculated ROM addresses so they can be animated and rotated/flipped depending on direction.
+
+## Collision
+
+The map is simplified into grid coordinates. The player's pixel position is converted into a simpler map position, then a collision ROM is checked before movement is applied.
+
+I split this into address, wait, read and update stages because the memory output was not available in the same cycle.
+
+## Noise and zombie detection
+
+Noise is part of the gameplay.
+
+The sound state increases when the player moves, sprints or shoots. Louder actions increase the zombie detection radius. The zombies compare their squared distance to this radius and start tracking the player when they detect them.
 
 ## Testing
 
-I tested the design using both simulation waveforms and gameplay testing.
+I tested the project using waveform simulation and gameplay testing.
 
-The main waveform tests covered:
+The main things I tested were:
 
+- VGA timing
+- sprite rendering
+- player movement
+- collision checks
 - zombie detection radius
-- zombie tracking behaviour
-- weapon firing behaviour
-- bullet spread and range
-- edge cases found during testing
+- zombie tracking
+- bullet behaviour
+- weapon differences
+- wave progression
+- game over/win states
 
-A few bugs were found through testing and kept where they made the game more interesting, such as a shotgun-to-knife switch interaction.
+## Issues I would improve
 
-## Known issues
+This was a coursework project, so there are still things I would clean up:
 
-The project worked, but there are things I would improve:
-
-- replace some wide bullet-to-zombie signal passing with RAM or a cleaner shared structure
+- replace wide bullet coordinate buses with a cleaner memory/shared structure
 - improve zombie collision with the map
-- add more automated assertions to the testbenches
-- clean up some clock/reset logic
-- package the Vivado project more cleanly
-- include the full project code, not just the VGA/player-rendering snapshot
+- remove old debug `$display` statements
+- make clocking cleaner by using clock-enable pulses instead of generated clocks
+- add more assertions to the testbenches
+- package the Vivado project with clearer IP recreation steps
+- tidy the ROM/IP names so the project is easier to rebuild
 
 ## What I learned
 
-This project gave me much stronger experience with:
+This project helped me improve at:
 
 - Verilog module design
 - VGA timing
 - FPGA block memory
-- COE file generation
 - sprite rendering
-- hardware game logic
+- COE file generation
+- collision handling
 - multi-clock debugging
-- testbench waveform analysis
-- designing around FPGA resource limits
+- hardware game logic
+- waveform testing
+- working around FPGA resource and timing limits
+
+## Build notes
+
+This repository is not just plain Verilog. To rebuild it in Vivado, the generated IP blocks and `.coe` memory files need to be included.
+
+At minimum, the project needs:
+
+- clock wizard IP
+- block memory generator IPs
+- all sprite/background/UI `.coe` files
+- board constraint file for the Nexys A7
+- VGA, button, switch and clock pin mappings
 
 ## AI disclosure
 
-This README was drafted with AI assistance from my original project report and code.
+This README was drafted with AI assistance from my original report and recovered Verilog files.
